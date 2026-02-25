@@ -37,7 +37,7 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GHCR_TOKEN }}
-
+      
       - name: Download and push chart to GHCR
         shell: pwsh
         run: |
@@ -77,13 +77,20 @@ jobs:
             
             Write-Host ""
             Write-Host "Pushing to GHCR..."
-            $targetRegistry = "oci://${{ env.REGISTRY }}/$owner"
             $simpleName = $chartName.ToLower()
+            $targetRegistry = "oci://${{ env.REGISTRY }}/$owner"
             Write-Host "Target: ${{ env.REGISTRY }}/$owner/$simpleName"
-            helm push $chartFile.FullName $targetRegistry 2>&1 | Out-Host
+            
+            # Enable debug logging for helm push
+            helm push $chartFile.FullName $targetRegistry --debug 2>&1 | Out-Host
             
             if ($LASTEXITCODE -ne 0) {
-              throw "Failed to push chart to GHCR"
+              Write-Host ""
+              Write-Host "Troubleshooting:"
+              Write-Host "1. Verify GHCR_TOKEN has 'write:packages' scope"
+              Write-Host "2. Check if ${{ env.REGISTRY }}/$owner is accessible"
+              Write-Host "3. Ensure user has push permissions to the registry"
+              throw "Failed to push chart to GHCR (403 typically means auth/permission issue)"
             }
             
             Remove-Item -Path $chartFile.FullName -Force
@@ -91,7 +98,7 @@ jobs:
             Write-Host ""
             Write-Host "===================================="
             Write-Host "Success: $simpleName : $chartVersion"
-            Write-Host "Location: ${{ env.REGISTRY }}/$owner/$($simpleName):$($chartVersion)"
+            Write-Host "Location: ${{ env.REGISTRY }}/$owner/$simpleName`:$chartVersion"
             Write-Host "===================================="
             
           } catch {
