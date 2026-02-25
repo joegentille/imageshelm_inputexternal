@@ -1,0 +1,100 @@
+name: Copy Helm Chart to GHCR
+on:
+  workflow_dispatch:
+    inputs:
+      repository_url:
+        description: 'Helm repository URL (e.g., https://charts.bitnami.com/bitnami)'
+        required: true
+        type: string
+      chart_name:
+        description: 'Chart name (e.g., external-dns, mysql, redis)'
+        required: true
+        type: string
+      chart_version:
+        description: 'Chart version (e.g., 9.0.3)'
+        required: true
+        type: string
+env:
+  REGISTRY: ghcr.io
+jobs:
+  copy-helm-chart:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'latest'
+      
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Download and push chart to GHCR
+        shell: pwsh
+        run: |
+          $repoUrl = "${{ github.event.inputs.repository_url }}"
+          $chartName = "${{ github.event.inputs.chart_name }}"
+          $chartVersion = "${{ github.event.inputs.chart_version }}"
+          $owner = "${{ github.repository_owner }}".ToLower()
+          $packageDir = "$env:TEMP\helm-packages"
+          
+          New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
+          
+          Write-Host "===================================="
+          Write-Host "Chart: $chartName"
+          Write-Host "Version: $chartVersion"
+          Write-Host "Repository: $repoUrl"
+          Write-Host "===================================="
+          Write-Host ""
+          
+          try {
+            Write-Host "Adding Helm repository..."
+            helm repo add external $repoUrl --force-update
+            helm repo update
+            
+            Write-Host "Downloading chart..."
+            $fullChartName = "external/$chartName"
+            helm pull $fullChartName --version $chartVersion --destination $packageDir 2>&1 | Out-Host
+            
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to download chart"
+            }
+            
+            $chartFile = Get-ChildItem -Path $packageDir -Filter "*.tgz" | Select-Object -First 1
+            
+            if (-not $chartFile) {
+              throw "Chart file not found after download"
+            }
+            
+            Write-Host ""
+            Write-Host "Pushing to GHCR..."
+            $targetRegistry = "oci://${{ env.REGISTRY }}/$owner"
+            $simpleName = $chartName.ToLower()
+            Write-Host "Target: ${{ env.REGISTRY }}/$owner/$simpleName"
+            helm push $chartFile.FullName $targetRegistry 2>&1 | Out-Host
+            
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to push chart to GHCR"
+            }
+            
+            Remove-Item -Path $chartFile.FullName -Force
+            
+            Write-Host ""
+            Write-Host "===================================="
+            Write-Host "Success: $simpleName : $chartVersion"
+            Write-Host "Location: ${{ env.REGISTRY }}/$owner/$simpleName:$chartVersion"
+            Write-Host "===================================="
+            
+          } catch {
+            Write-Host "Error processing chart"
+            exit 1
+          }
